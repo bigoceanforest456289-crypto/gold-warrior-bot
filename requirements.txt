@@ -1,5 +1,5 @@
 flask
 yfinance
 pandas
-pandas-ta==0.3.14b
+pandas_ta
 gunicorn
