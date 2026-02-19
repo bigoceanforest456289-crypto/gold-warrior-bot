@@ -2,118 +2,112 @@ import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
 from flask import Flask, render_template_string
-import threading
-import time
+import os
 
 app = Flask(__name__)
 
-# ตัวแปรเก็บสถานะล่าสุดเพื่อเช็คการเปลี่ยนสี
-last_signals = {"4H": None, "1H": None, "30M": None}
+# เก็บสถานะสีล่าสุดไว้ในหน่วยความจำ (Global) เพื่อเช็คการเปลี่ยนสี
+status_history = {"4H": None, "1H": None, "30M": None}
 
-def get_gold_signals():
-    global last_signals
+def get_signals():
+    global status_history
     intervals = {"4H": "4h", "1H": "1h", "30M": "30m"}
     results = {}
-    changed = False
+    is_changed = False # ตัวแปรเช็คว่ามีสีไหนเปลี่ยนจากเดิมไหม
 
     for label, tf in intervals.items():
-        data = yf.download("GC=F", interval=tf, period="5d", progress=False)
-        if not data.empty:
-            # ใช้ pandas_ta คำนวณ EMA 12, 26
-            ema12 = ta.ema(data['Close'], length=12)
-            ema26 = ta.ema(data['Close'], length=26)
+        try:
+            data = yf.download("GC=F", interval=tf, period="5d", progress=False)
+            if not data.empty:
+                ema12 = ta.ema(data['Close'], length=12)
+                ema26 = ta.ema(data['Close'], length=26)
+                
+                current_close = float(data['Close'].iloc[-1])
+                current_ema12 = float(ema12.iloc[-1])
+                current_ema26 = float(ema26.iloc[-1])
+                
+                new_color = "green" if current_ema12 > current_ema26 else "red"
+                
+                # ถ้าสีเปลี่ยนจากครั้งก่อน ให้ตั้งค่าแจ้งเตือน
+                if status_history[label] is not None and status_history[label] != new_color:
+                    is_changed = True
+                
+                status_history[label] = new_color
+                results[label] = {"price": round(current_close, 2), "color": new_color}
+        except:
+            results[label] = {"price": "Error", "color": "gray"}
             
-            current_close = data['Close'].iloc[-1]
-            current_ema12 = ema12.iloc[-1]
-            current_ema26 = ema26.iloc[-1]
-            
-            # ตัดสินใจสี: เขียวถ้า EMA12 > EMA26
-            color = "green" if current_ema12 > current_ema26 else "red"
-            
-            # เช็คว่าสีเปลี่ยนจากครั้งก่อนหรือไม่
-            if last_signals[label] is not None and last_signals[label] != color:
-                changed = True
-            
-            last_signals[label] = color
-            results[label] = {
-                "price": round(float(current_close), 2),
-                "color": color,
-                "time": data.index[-1].strftime('%H:%M')
-            }
-    return results, changed
+    return results, is_changed
 
 @app.route('/')
 def index():
-    signals, is_changed = get_gold_signals()
+    signals, color_changed = get_signals()
     
-    # HTML + CSS + JavaScript สำหรับเสียงเตือนและปุ่ม Stop
-    html_template = """
+    html = """
     <!DOCTYPE html>
     <html>
     <head>
         <title>WARRIOR GOLD CLOUD</title>
         <meta http-equiv="refresh" content="60">
         <style>
-            body { background: #1a1a1a; color: white; font-family: Arial; text-align: center; padding-top: 50px; }
-            .container { display: flex; justify-content: center; gap: 20px; }
-            .box { width: 250px; padding: 20px; border-radius: 15px; border: 2px solid #555; }
-            .green { background: #006400; }
-            .red { background: #8b0000; }
-            h1 { color: #ffd700; margin-bottom: 30px; }
-            .btn-stop { 
-                margin-top: 50px; padding: 15px 40px; font-size: 20px; 
-                background: #ff4500; color: white; border: none; border-radius: 10px; cursor: pointer;
-                box-shadow: 0 5px #999;
-            }
-            .btn-stop:active { transform: translateY(4px); box-shadow: 0 2px #666; }
+            body { background: #1a1a1a; color: white; font-family: sans-serif; text-align: center; padding: 20px; }
+            .container { display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; }
+            .box { width: 200px; padding: 20px; border-radius: 10px; margin: 10px; transition: 0.5s; }
+            .green { background: #2ecc71; box-shadow: 0 0 15px #2ecc71; }
+            .red { background: #e74c3c; box-shadow: 0 0 15px #e74c3c; }
+            .gray { background: #95a5a6; }
+            .btn-stop { background: #f39c12; border: none; padding: 15px 30px; color: white; 
+                        border-radius: 5px; font-size: 18px; cursor: pointer; margin-top: 30px; }
+            .btn-stop:hover { background: #e67e22; }
         </style>
     </head>
     <body>
-        <h1>GOLD WARRIOR SIGNAL (OREGON STATION)</h1>
+        <h1 style="color: #f1c40f;">WARRIOR GOLD CLOUD</h1>
         <div class="container">
             {% for tf, data in signals.items() %}
             <div class="box {{ data.color }}">
                 <h2>{{ tf }}</h2>
-                <p style="font-size: 30px; font-weight: bold;">{{ data.price }}</p>
-                <p>Last Update: {{ data.time }}</p>
+                <p style="font-size: 28px;">{{ data.price }}</p>
             </div>
             {% endfor %}
         </div>
-
-        <button class="btn-stop" onclick="stopAlarm()">STOP ALARM (MUTE)</button>
+        
+        <button class="btn-stop" id="stopBtn" onclick="stopAlarm()">STOP ALARM (MUTE)</button>
 
         <script>
-            // สร้างเสียง Beep
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            let isMuted = false;
+            let alarmMuted = localStorage.getItem('alarmMuted') === 'true';
+            if (alarmMuted) document.getElementById('stopBtn').innerText = "ALARM IS MUTED";
+
+            function stopAlarm() {
+                alarmMuted = !alarmMuted;
+                localStorage.setItem('alarmMuted', alarmMuted);
+                document.getElementById('stopBtn').innerText = alarmMuted ? "ALARM IS MUTED" : "STOP ALARM (MUTE)";
+                if (!alarmMuted) location.reload();
+            }
 
             function playSound() {
-                if (isMuted) return;
+                if (alarmMuted) return;
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 const oscillator = audioCtx.createOscillator();
                 const gainNode = audioCtx.createGain();
                 oscillator.connect(gainNode);
                 gainNode.connect(audioCtx.destination);
                 oscillator.type = 'sine';
-                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // ความถี่เสียง
+                oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
                 gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
                 oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 1); // ร้องนาน 1 วินาที
+                oscillator.stop(audioCtx.currentTime + 1.5);
             }
 
-            function stopAlarm() {
-                isMuted = true;
-                alert("Alarm Muted for this session.");
-            }
-
-            // ถ้ามีการเปลี่ยนสี (ค่าจาก Server) ให้ส่งเสียง
-            if ({{ "true" if is_changed else "false" }}) {
+            // ถ้ามีการเปลี่ยนสี (ค่าจาก Server) ให้ส่งเสียงเตือน
+            if ({{ 'true' if color_changed else 'false' }}) {
                 playSound();
             }
         </script>
     </body>
     </html>
     """
-    return render_template_string(html_template, signals=signals, is_changed=is_changed)
+    return render_template_string(html, signals=signals, color_changed=color_changed)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
