@@ -6,19 +6,23 @@ import os
 
 app = Flask(__name__)
 
-# เก็บสถานะสีล่าสุดไว้ในหน่วยความจำ (Global) เพื่อเช็คการเปลี่ยนสี
 status_history = {"4H": None, "1H": None, "30M": None}
 
 def get_signals():
     global status_history
     intervals = {"4H": "4h", "1H": "1h", "30M": "30m"}
     results = {}
-    is_changed = False # ตัวแปรเช็คว่ามีสีไหนเปลี่ยนจากเดิมไหม
+    is_changed = False
 
     for label, tf in intervals.items():
         try:
-            data = yf.download("GC=F", interval=tf, period="5d", progress=False)
+            # ใช้ Ticker object เพื่อตั้งค่า Proxy หรือ Headers ได้ดีกว่าในอนาคต
+            ticker = yf.Ticker("GC=F")
+            # ดึงข้อมูลย้อนหลัง 5 วัน
+            data = ticker.history(interval=tf, period="5d")
+            
             if not data.empty:
+                # คำนวณ EMA โดยใช้ pandas_ta
                 ema12 = ta.ema(data['Close'], length=12)
                 ema26 = ta.ema(data['Close'], length=26)
                 
@@ -28,14 +32,16 @@ def get_signals():
                 
                 new_color = "green" if current_ema12 > current_ema26 else "red"
                 
-                # ถ้าสีเปลี่ยนจากครั้งก่อน ให้ตั้งค่าแจ้งเตือน
                 if status_history[label] is not None and status_history[label] != new_color:
                     is_changed = True
                 
                 status_history[label] = new_color
                 results[label] = {"price": round(current_close, 2), "color": new_color}
-        except:
-            results[label] = {"price": "Error", "color": "gray"}
+            else:
+                results[label] = {"price": "No Data", "color": "gray"}
+        except Exception as e:
+            # แสดง Error สั้นๆ เพื่อให้เรารู้ว่าเกิดจากอะไร
+            results[label] = {"price": "Retry...", "color": "gray"}
             
     return results, is_changed
 
@@ -52,13 +58,12 @@ def index():
         <style>
             body { background: #1a1a1a; color: white; font-family: sans-serif; text-align: center; padding: 20px; }
             .container { display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; }
-            .box { width: 200px; padding: 20px; border-radius: 10px; margin: 10px; transition: 0.5s; }
-            .green { background: #2ecc71; box-shadow: 0 0 15px #2ecc71; }
-            .red { background: #e74c3c; box-shadow: 0 0 15px #e74c3c; }
-            .gray { background: #95a5a6; }
+            .box { width: 200px; padding: 20px; border-radius: 10px; margin: 10px; border: 2px solid #444; }
+            .green { background: #006400; box-shadow: 0 0 20px #2ecc71; }
+            .red { background: #8b0000; box-shadow: 0 0 20px #e74c3c; }
+            .gray { background: #333; }
             .btn-stop { background: #f39c12; border: none; padding: 15px 30px; color: white; 
-                        border-radius: 5px; font-size: 18px; cursor: pointer; margin-top: 30px; }
-            .btn-stop:hover { background: #e67e22; }
+                        border-radius: 5px; font-size: 18px; cursor: pointer; margin-top: 30px; border-bottom: 4px solid #d35400; }
         </style>
     </head>
     <body>
@@ -67,7 +72,7 @@ def index():
             {% for tf, data in signals.items() %}
             <div class="box {{ data.color }}">
                 <h2>{{ tf }}</h2>
-                <p style="font-size: 28px;">{{ data.price }}</p>
+                <p style="font-size: 32px; font-weight: bold;">{{ data.price }}</p>
             </div>
             {% endfor %}
         </div>
@@ -82,7 +87,6 @@ def index():
                 alarmMuted = !alarmMuted;
                 localStorage.setItem('alarmMuted', alarmMuted);
                 document.getElementById('stopBtn').innerText = alarmMuted ? "ALARM IS MUTED" : "STOP ALARM (MUTE)";
-                if (!alarmMuted) location.reload();
             }
 
             function playSound() {
@@ -93,13 +97,12 @@ def index():
                 oscillator.connect(gainNode);
                 gainNode.connect(audioCtx.destination);
                 oscillator.type = 'sine';
-                oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
-                gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                oscillator.frequency.setValueAtTime(660, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
                 oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 1.5);
+                oscillator.stop(audioCtx.currentTime + 1);
             }
 
-            // ถ้ามีการเปลี่ยนสี (ค่าจาก Server) ให้ส่งเสียงเตือน
             if ({{ 'true' if color_changed else 'false' }}) {
                 playSound();
             }
