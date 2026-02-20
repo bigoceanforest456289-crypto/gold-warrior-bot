@@ -1,5 +1,2 @@
-flask
-yfinance
-pandas
-pandas_ta
-gunicorn
+functions-framework==3.*
+pytz
